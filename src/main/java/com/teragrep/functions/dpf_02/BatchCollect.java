@@ -128,25 +128,33 @@ public final class BatchCollect extends SortOperation {
             }
         }
 
-        Dataset<Row> orderedDs = orderDataset(batchDF);
+        Dataset<Row> orderedBatch = orderDataset(batchDF);
         if (!skipLimiting && limit > 0) {
-            orderedDs = orderedDs.limit(limit);
+            orderedBatch = orderedBatch.limit(limit);
         }
-        List<Row> collected = orderedDs.collectAsList();
-        Dataset<Row> createdDsFromCollected = SparkSession.builder().getOrCreate().createDataFrame(collected, this.inputSchema);
+
         Dataset<Row> current;
         if (this.savedDs == null) {
-            current = createdDsFromCollected;
+            current = orderedBatch;
         }
         else {
-            current = savedDs.union(createdDsFromCollected);
+            current = savedDs.union(orderedBatch);
         }
 
         current = orderDataset(current);
         if (!skipLimiting && limit > 0) {
             current = current.limit(limit);
         }
-        this.savedDs = current;
+
+        current.persist();
+        current = current.localCheckpoint(true);
+        // materialize without pulling to driver
+        current.count();
+
+        if (savedDs != null) {
+            savedDs.unpersist(false);
+        }
+        savedDs = current;
 
         // Post batchCollect steps processing
         Dataset<Row> rv = current;
