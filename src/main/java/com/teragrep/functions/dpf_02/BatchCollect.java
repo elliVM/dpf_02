@@ -67,7 +67,7 @@ public final class BatchCollect {
         this(defaultColumn, batchLimit, 0, Collections.emptyList());
     }
 
-    public BatchCollect(final String defaultColumn, final int batchLimit,  final int postBatchCollectLimit, final List<SortByClause> sortByClauses) {
+    public BatchCollect(final String defaultColumn, final int batchLimit, final int postBatchCollectLimit, final List<SortByClause> sortByClauses) {
         this(new Sort(sortByClauses, defaultColumn), batchLimit, batchLimit, postBatchCollectLimit);
     }
 
@@ -77,15 +77,15 @@ public final class BatchCollect {
 
 
     public BatchCollect(final SearchResults initialResults, int batchLimit, int resultsLimit, int postBatchCollectLimit) {
-        this(initialResults,initialResults, batchLimit, resultsLimit, postBatchCollectLimit);
+        this(initialResults, initialResults, batchLimit, resultsLimit, postBatchCollectLimit);
     }
 
     public BatchCollect(final SearchResults initialResults, final SearchResults results, int batchLimit, int resultsLimit, int postBatchCollectLimit) {
-       this.emptyResults = initialResults;
-       this.results = results;
-       this.batchLimit = batchLimit;
-       this.resultsLimit = resultsLimit;
-       this.postBatchCollectLimit = postBatchCollectLimit;
+        this.emptyResults = initialResults;
+        this.results = results;
+        this.batchLimit = batchLimit;
+        this.resultsLimit = resultsLimit;
+        this.postBatchCollectLimit = postBatchCollectLimit;
     }
 
     /**
@@ -111,21 +111,24 @@ public final class BatchCollect {
     public void collect(Dataset<Row> batchDF, Long batchId, List<AbstractStep> postBcSteps, boolean skipLimiting) {
         LOGGER.trace("collect() processing batch id <{}> with skip limiting <{}>", batchId, skipLimiting);
 
-        final int selectedLimit = postBcSteps.isEmpty()
+        final int effectiveResultsLimit = postBcSteps.isEmpty()
                 ? resultsLimit
                 : postBatchCollectLimit;
-        final Limits batchLimits;
-        if (skipLimiting || selectedLimit < 0) {
-            batchLimits = new Limits();
+
+        final Limits collectionLimit;
+
+        if (skipLimiting || effectiveResultsLimit < 1) {
+            collectionLimit = new Limits();
         } else {
-            int selectedBatchLimit = Math.max(batchLimit, selectedLimit);
-            batchLimits = new Limits(selectedBatchLimit, selectedLimit);
+            int selectedBatchLimit = Math.max(batchLimit, effectiveResultsLimit);
+            collectionLimit = new Limits(selectedBatchLimit, effectiveResultsLimit);
         }
 
-        final SearchResults updated = results.including(batchDF, batchLimits);
-        final SearchResults postBatchCollectResults = new PostBatchCollectResults(updated, postBcSteps);
-        this.results = updated;
-        this.outputDs = postBatchCollectResults.dataset();
+        final SearchResults accumulatedResults = results.including(batchDF, collectionLimit);
+        final SearchResults postProcessedResults = new PostBatchCollectResults(accumulatedResults, postBcSteps);
+
+        this.results = accumulatedResults;
+        this.outputDs = postProcessedResults.dataset();
     }
 
     private Dataset<Row> orderDataset(Dataset<Row> ds) {
@@ -135,7 +138,7 @@ public final class BatchCollect {
     public Dataset<Row> getCollectedAsDataframe() {
         Dataset<Row> rv;
         if (this.lastRowDs != null) {
-           rv = this.outputDs.union(this.lastRowDs);
+            rv = this.outputDs.union(this.lastRowDs);
         } else {
             rv = this.outputDs;
         }
