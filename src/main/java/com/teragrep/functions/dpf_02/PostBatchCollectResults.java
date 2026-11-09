@@ -12,12 +12,15 @@ final class PostBatchCollectResults implements SearchResults {
 
     PostBatchCollectResults(final SearchResults origin, final List<AbstractStep> steps) {
         this.origin = origin;
-        this.steps = steps;
+        this.steps = List.copyOf(steps);
     }
 
     @Override
     public SearchResults including(final Dataset<Row> batch, final Limits limits) {
-        return origin.including(batch, limits);
+        return new PostBatchCollectResults(
+                origin.including(batch, limits),
+                steps
+        );
     }
 
     @Override

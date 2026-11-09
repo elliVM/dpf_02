@@ -9,20 +9,17 @@ import java.util.List;
 import java.util.Objects;
 
 public final class TopSearchResults implements SearchResults {
-    private final int capacity;
     private final Sort sort;
     private final List<Row> retained;
     private final StructType schema;
     private final SparkSession spark;
 
     public TopSearchResults(
-            final int capacity,
             final Sort sort,
             final List<Row> retained,
             final StructType schema,
             final SparkSession spark
     ) {
-        this.capacity = capacity;
         this.sort = Objects.requireNonNull(sort);
         this.retained = List.copyOf(Objects.requireNonNull(retained));
         this.schema = Objects.requireNonNull(schema);
@@ -39,9 +36,8 @@ public final class TopSearchResults implements SearchResults {
         final List<Row> incomingRows = limitedBatch.collectAsList();
         final Dataset<Row> existing = spark.createDataFrame(retained, schema);
         final Dataset<Row> additions = spark.createDataFrame(incomingRows, schema);
-        final List<Row> selected = sort.apply(existing.union(additions)).limit(capacity).collectAsList();
+        final List<Row> selected = sort.apply(existing.union(additions)).collectAsList();
         return new TopSearchResults(
-                capacity,
                 sort,
                 selected,
                 schema,

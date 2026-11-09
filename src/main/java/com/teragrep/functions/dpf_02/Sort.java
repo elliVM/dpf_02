@@ -63,7 +63,14 @@ public final class Sort {
             expression = column;
         }
 
-        return expression;
+        final Column ordering;
+        if (clause.isDescending()) {
+            ordering = expression.desc();
+        } else {
+            ordering = expression.asc();
+        }
+
+        return ordering;
     }
 
     private SortByClause.Type detectedType(final Dataset<Row> dataset, final String fieldName) {
@@ -71,7 +78,8 @@ public final class Sort {
                 .filter(candidate -> candidate.name().equals(fieldName))
                 .collect(Collectors.toList());
 
-        final boolean fieldExists = !fieldName.isEmpty();
+        final boolean fieldExists = !fields.isEmpty();
+
         final DataType type = fieldExists
                 ? fields.get(0).dataType()
                 : DataTypes.NullType;

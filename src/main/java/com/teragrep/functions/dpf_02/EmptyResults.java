@@ -8,11 +8,9 @@ import java.util.Objects;
 
 final class EmptyResults implements SearchResults {
 
-    private final int capacity;
     private final Sort sort;
 
-    EmptyResults(final int capacity, final Sort sort) {
-        this.capacity = capacity;
+    EmptyResults(final Sort sort) {
         this.sort = Objects.requireNonNull(sort);
     }
 
@@ -20,9 +18,9 @@ final class EmptyResults implements SearchResults {
     public SearchResults including(final Dataset<Row> batch, final Limits limits) {
         final Dataset<Row> sorted = sort.apply(batch);
         final Dataset<Row> limited = limits.incoming(sorted);
-        final List<Row> selected = limited.collectAsList();
+        final Dataset<Row> accumulated = limits.accumulated(limited);
+        final List<Row> selected = accumulated.collectAsList();
         return new TopSearchResults(
-                capacity,
                 sort,
                 selected,
                 batch.schema(),
