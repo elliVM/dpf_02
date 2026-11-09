@@ -47,39 +47,45 @@ package com.teragrep.functions.dpf_02;
  */
 
 import org.apache.spark.sql.*;
-import org.apache.spark.sql.streaming.StreamingQueryException;
-import org.apache.spark.sql.types.StructType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
-public final class BatchCollect extends SortOperation {
+public final class BatchCollect {
     private static final Logger LOGGER = LoggerFactory.getLogger(BatchCollect.class);
-    private Dataset<Row> savedDs = null;
-    private Dataset<Row> lastRowDs = null;
-    private Dataset<Row> outputDs = null;
-    private final String sortColumn;
-    private final int defaultLimit;
-    private final int postBcLimit;
-    private StructType inputSchema;
-    private boolean sortedBySingleColumn = false;
 
-    public BatchCollect(String sortColumn, int defaultLimit) {
-        this(sortColumn, defaultLimit, 0, new ArrayList<>());
+    private final SearchResults emptyResults;
+    private final int batchLimit;
+    private final int resultsLimit;
+    private final int postBatchCollectLimit;
+    private SearchResults results;
+    private Dataset<Row> outputDs;
+    private Dataset<Row> lastRowDs;
+
+    public BatchCollect(final String defaultColumn, final int batchLimit) {
+        this(new Sort(Collections.emptyList(), defaultColumn), batchLimit);
     }
 
-    public BatchCollect(String sortColumn, int defaultLimit, int postBcLimit) {
-        this(sortColumn, defaultLimit, postBcLimit, new ArrayList<>());
+    public BatchCollect(final String defaultColumn, final int batchLimit, final int postBatchCollectLimit, final List<SortByClause> sortByClauses) {
+        this(new Sort(sortByClauses, defaultColumn), batchLimit);
     }
 
-    public BatchCollect(String sortColumn, int defaultLimit, int postBcLimit, List<SortByClause> listOfSortByClauses) {
-        super(listOfSortByClauses);
-        LOGGER.info("Initialized BatchCollect based on column <[{}]> and a limit of <[{}]> row(s). SortByClauses included: <[{}]>. Post batchcollect limit of <[{}]> row(s)",
-                sortColumn, defaultLimit, (listOfSortByClauses != null ? listOfSortByClauses.size() : "null"), postBcLimit);
-        this.sortColumn = sortColumn;
-        this.defaultLimit = defaultLimit;
-        this.postBcLimit = postBcLimit;
+    public BatchCollect(final Sort sort, final int batchLimit) {
+        this(new EmptyResults(batchLimit, sort), batchLimit);
+    }
+
+
+    public BatchCollect(final SearchResults initialResults, int batchLimit) {
+        this(initialResults, initialResults, batchLimit);
+    }
+
+    public BatchCollect(final SearchResults initialResults, final SearchResults results, int batchLimit) {
+        this.emptyResults = initialResults;
+        this.results = results;
+        this.batchLimit = batchLimit;
+        this.resultsLimit = batchLimit;
+        this.postBatchCollectLimit = batchLimit;
     }
 
     /**
@@ -91,82 +97,32 @@ public final class BatchCollect extends SortOperation {
      */
     public Dataset<Row> call(Dataset<Row> df, Long id, boolean skipLimiting) {
         Dataset<Row> rv;
-        this.collect(df, id, Collections.emptyList(), skipLimiting);
+        collect(df, id, Collections.emptyList(), skipLimiting);
 
-        if (this.lastRowDs != null) {
-            rv = this.outputDs.union(this.lastRowDs);
+        if (lastRowDs != null) {
+            rv = outputDs.union(lastRowDs);
         } else {
-            rv = this.outputDs;
+            rv = outputDs;
         }
 
         return rv;
     }
 
     public void collect(Dataset<Row> batchDF, Long batchId, List<AbstractStep> postBcSteps, boolean skipLimiting) {
-        // Apply post-batchcollect limit if steps are present, otherwise use the default.
-        // limit<=0 means no limit
-        final int limit;
-        if (!postBcSteps.isEmpty()) {
-            limit = this.postBcLimit;
+        LOGGER.trace("collect() processing batch id <{}> with skip limiting <{}>", batchId, skipLimiting);
+        Limits limits;
+        if (skipLimiting) {
+            limits = new Limits(batchLimit, resultsLimit, postBatchCollectLimit);
         } else {
-            limit = this.defaultLimit;
+            limits = new Limits();
         }
-
-        // check that sortColumn (_time) exists,
-        // and get the sortColId
-        // otherwise, no sorting will be done.
-        if (this.inputSchema == null) {
-            this.inputSchema = batchDF.schema();
-        }
-
-        if (this.getListOfSortByClauses() == null || this.getListOfSortByClauses().isEmpty()) {
-            for (String field : this.inputSchema.fieldNames()) {
-                if (field.equals(this.sortColumn)) {
-                    this.sortedBySingleColumn = true;
-                    break;
-                }
-            }
-        }
-
-        Dataset<Row> orderedDs = orderDataset(batchDF);
-        if (!skipLimiting && limit > 0) {
-            orderedDs = orderedDs.limit(limit);
-        }
-        List<Row> collected = orderedDs.collectAsList();
-        Dataset<Row> createdDsFromCollected = SparkSession.builder().getOrCreate().createDataFrame(collected, this.inputSchema);
-        Dataset<Row> current;
-        if (this.savedDs == null) {
-            current = createdDsFromCollected;
-        }
-        else {
-            current = savedDs.union(createdDsFromCollected);
-        }
-
-        current = orderDataset(current);
-        if (!skipLimiting && limit > 0) {
-            current = current.limit(limit);
-        }
-        this.savedDs = current;
-
-        // Post batchCollect steps processing
-        Dataset<Row> rv = current;
-        for (final AbstractStep step : postBcSteps) {
-            try {
-                rv = step.get(rv);
-            } catch (StreamingQueryException e) {
-                throw new IllegalStateException("Exception occurred while running post-batchcollect steps: ", e);
-            }
-        }
-
-        this.outputDs = rv;
+        final SearchResults updated = results.including(batchDF, limits);
+        final SearchResults postBatchCollectResults = new PostBatchCollectResults(updated, postBcSteps);
+        this.outputDs = postBatchCollectResults.dataset();
     }
 
     private Dataset<Row> orderDataset(Dataset<Row> ds) {
-        if (this.sortedBySingleColumn) {
-            return ds.orderBy(functions.col(this.sortColumn).desc());
-        } else {
-            return this.orderDatasetByGivenColumns(ds);
-        }
+        return results.dataset();
     }
 
     public Dataset<Row> getCollectedAsDataframe() {
@@ -176,15 +132,13 @@ public final class BatchCollect extends SortOperation {
         } else {
             rv = this.outputDs;
         }
+        Objects.requireNonNull(rv, "getCollectedAsDataframe() tried to return null value");
         return rv;
     }
 
     public void clear() {
         LOGGER.info("dpf_02 cleared");
-        this.savedDs = null;
-        this.outputDs = null;
-        this.lastRowDs = null;
-        this.inputSchema = null;
+        this.results = emptyResults;
     }
 
     public void updateLastRow(Dataset<Row> lastRow) {
